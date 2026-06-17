@@ -34,8 +34,8 @@
               <el-icon :size="32"><BellFilled /></el-icon>
             </div>
             <div class="card-info">
-              <div class="card-value">{{ alarmCabinets }}</div>
-              <div class="card-label">温度报警</div>
+              <div class="card-value">{{ unhandledAlarmCount }}</div>
+              <div class="card-label">待处理报警</div>
             </div>
           </div>
         </el-card>
@@ -158,36 +158,59 @@
       <template #header>
         <div class="card-header">
           <span>温度报警记录</span>
-          <el-button type="danger" @click="clearAlarms" :disabled="alarmRecords.length === 0">
-            清除已处理报警
-          </el-button>
+          <div class="alarm-header-actions">
+            <el-radio-group v-model="alarmFilter" size="small" @change="renderCharts">
+              <el-radio-button value="all">全部</el-radio-button>
+              <el-radio-button value="unhandled">待处理</el-radio-button>
+              <el-radio-button value="handled">已处理</el-radio-button>
+            </el-radio-group>
+            <el-button type="danger" @click="clearHandledAlarms" :disabled="handledAlarmCount === 0">
+              清除已处理
+            </el-button>
+          </div>
         </div>
       </template>
 
-      <el-table :data="alarmRecords" stripe border>
+      <el-table :data="filteredAlarms" stripe border>
         <el-table-column prop="cabinetCode" label="柜位" width="100" />
         <el-table-column prop="temperature" label="温度" width="100">
           <template #default="{ row }">
             <span class="alarm-temp">{{ row.temperature }}°C</span>
           </template>
         </el-table-column>
-        <el-table-column prop="recordTime" label="报警时间" width="160" />
+        <el-table-column prop="alarmTime" label="报警时间" width="160" />
         <el-table-column label="报警类型" width="120">
           <template #default="{ row }">
             <el-tag type="danger">
-              {{ row.temperature > -10 ? '温度过高' : '温度过低' }}
+              {{ row.alarmType === 'high' ? '温度过高' : '温度过低' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag type="warning">未处理</el-tag>
+            <el-tag :type="row.handled ? 'success' : 'warning'">
+              {{ row.handled ? '已处理' : '待处理' }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="处理信息" width="180">
           <template #default="{ row }">
-            <el-button size="small" type="primary" @click="handleAlarm(row)">
-              处理
+            <div v-if="row.handled">
+              <div class="handler-info">{{ row.handler }} · {{ row.handleTime }}</div>
+              <div v-if="row.remarks" class="handler-remarks">{{ row.remarks }}</div>
+            </div>
+            <span v-else class="text-muted">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="180" fixed="right">
+          <template #default="{ row }">
+            <el-button 
+              size="small" 
+              type="primary" 
+              @click="handleAlarm(row)"
+              :disabled="row.handled"
+            >
+              {{ row.handled ? '已处理' : '处理' }}
             </el-button>
             <el-button size="small" @click="viewCabinetChart(row)">
               查看曲线
@@ -225,9 +248,9 @@
         <el-descriptions :column="1" border>
           <el-descriptions-item label="柜位">{{ selectedAlarm.cabinetCode }}</el-descriptions-item>
           <el-descriptions-item label="报警温度">{{ selectedAlarm.temperature }}°C</el-descriptions-item>
-          <el-descriptions-item label="报警时间">{{ selectedAlarm.recordTime }}</el-descriptions-item>
+          <el-descriptions-item label="报警时间">{{ selectedAlarm.alarmTime }}</el-descriptions-item>
           <el-descriptions-item label="报警类型">
-            {{ selectedAlarm.temperature > -10 ? '温度过高' : '温度过低' }}
+            {{ selectedAlarm.alarmType === 'high' ? '温度过高' : '温度过低' }}
           </el-descriptions-item>
         </el-descriptions>
 
@@ -257,19 +280,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, onUnmounted } from 'vue'
+import { ref, computed, onMounted, nextTick, onUnmounted, watch } from 'vue'
 import { useCabinetStore } from '@/stores/cabinet'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ColdDrink, WarningFilled, BellFilled, Lightning, Switch } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
-import type { Cabinet, TemperatureRecord, DeviceInfo } from '@/types'
+import type { Cabinet, TemperatureAlarm } from '@/types'
 import dayjs from 'dayjs'
 
 const store = useCabinetStore()
 
 const cabinets = computed(() => store.cabinets)
 const devices = computed(() => store.devices)
-const temperatureRecords = computed(() => store.temperatureRecords)
+const temperatureAlarms = computed(() => store.temperatureAlarms)
 
 const normalCabinets = computed(() => 
   cabinets.value.filter(c => c.temperature >= -20 && c.temperature <= -10).length
@@ -277,19 +300,25 @@ const normalCabinets = computed(() =>
 const warningCabinets = computed(() => 
   cabinets.value.filter(c => (c.temperature > -10 && c.temperature <= -8) || (c.temperature < -20 && c.temperature >= -22)).length
 )
-const alarmCabinets = computed(() => 
-  cabinets.value.filter(c => c.temperature > -8 || c.temperature < -22).length
+const unhandledAlarmCount = computed(() => 
+  temperatureAlarms.value.filter(a => !a.handled).length
+)
+const handledAlarmCount = computed(() => 
+  temperatureAlarms.value.filter(a => a.handled).length
 )
 
 const powerStatus = ref<'main' | 'backup'>('main')
 const batteryLevel = ref(100)
 
-const alarmRecords = computed(() => 
-  temperatureRecords.value
-    .filter(r => r.isAbnormal)
-    .sort((a, b) => dayjs(b.recordTime).valueOf() - dayjs(a.recordTime).valueOf())
-    .slice(0, 20)
-)
+const alarmFilter = ref<'all' | 'unhandled' | 'handled'>('all')
+const filteredAlarms = computed(() => {
+  if (alarmFilter.value === 'unhandled') {
+    return temperatureAlarms.value.filter(a => !a.handled)
+  } else if (alarmFilter.value === 'handled') {
+    return temperatureAlarms.value.filter(a => a.handled)
+  }
+  return temperatureAlarms.value
+})
 
 const allTempChartRef = ref<HTMLElement | null>(null)
 const singleTempChartRef = ref<HTMLElement | null>(null)
@@ -299,7 +328,7 @@ let singleTempChart: echarts.ECharts | null = null
 const chartDialogVisible = ref(false)
 const alarmDialogVisible = ref(false)
 const selectedCabinet = ref<Cabinet | null>(null)
-const selectedAlarm = ref<TemperatureRecord | null>(null)
+const selectedAlarm = ref<TemperatureAlarm | null>(null)
 const chartHours = ref(24)
 
 const alarmForm = ref({
@@ -307,6 +336,10 @@ const alarmForm = ref({
   operator: '',
   remarks: ''
 })
+
+function renderCharts() {
+  renderAllTempChart()
+}
 
 function renderAllTempChart() {
   if (!allTempChartRef.value) return
@@ -337,7 +370,7 @@ function renderAllTempChart() {
       itemStyle: {
         color: colors[index % colors.length]
       },
-      data: history.map(h => h.temperature)
+      data: history.length > 0 ? history.map(h => h.temperature) : Array(hours).fill(cabinet.temperature)
     }
   })
   
@@ -399,7 +432,9 @@ function renderSingleChart() {
     xAxis: {
       type: 'category',
       boundaryGap: false,
-      data: history.map(h => chartHours.value <= 24 ? h.recordTime.slice(11, 16) : h.recordTime.slice(5, 16))
+      data: history.length > 0 
+        ? history.map(h => chartHours.value <= 24 ? h.recordTime.slice(11, 16) : h.recordTime.slice(5, 16))
+        : [dayjs().format('HH:mm')]
     },
     yAxis: {
       type: 'value',
@@ -411,7 +446,7 @@ function renderSingleChart() {
       name: '温度',
       type: 'line',
       smooth: true,
-      data: history.map(h => h.temperature),
+      data: history.length > 0 ? history.map(h => h.temperature) : [selectedCabinet.value.temperature],
       markLine: {
         silent: true,
         data: [
@@ -431,8 +466,8 @@ function renderSingleChart() {
   singleTempChart.setOption(option)
 }
 
-function viewCabinetChart(record: TemperatureRecord) {
-  const cabinet = cabinets.value.find(c => c.id === record.cabinetId)
+function viewCabinetChart(alarm: TemperatureAlarm) {
+  const cabinet = cabinets.value.find(c => c.id === alarm.cabinetId)
   if (cabinet) {
     selectedCabinet.value = cabinet
     chartHours.value = 24
@@ -441,8 +476,8 @@ function viewCabinetChart(record: TemperatureRecord) {
   }
 }
 
-function handleAlarm(record: TemperatureRecord) {
-  selectedAlarm.value = record
+function handleAlarm(alarm: TemperatureAlarm) {
+  selectedAlarm.value = alarm
   alarmForm.value = {
     action: '',
     operator: '',
@@ -457,16 +492,43 @@ function submitAlarmHandle() {
     return
   }
   
-  if (selectedAlarm.value && alarmForm.value.action === 'maintenance') {
+  if (!selectedAlarm.value) return
+  
+  store.handleTemperatureAlarm(
+    selectedAlarm.value.id,
+    alarmForm.value.operator,
+    alarmForm.value.remarks || alarmForm.value.action
+  )
+  
+  if (alarmForm.value.action === 'maintenance') {
     store.updateCabinetStatus(selectedAlarm.value.cabinetId, 'maintenance')
+  } else if (alarmForm.value.action === 'checked') {
+    const cabinet = cabinets.value.find(c => c.id === selectedAlarm.value?.cabinetId)
+    if (cabinet) {
+      store.updateCabinetStatus(
+        cabinet.id,
+        cabinet.currentBodyId ? 'occupied' : 'empty'
+      )
+    }
   }
   
   ElMessage.success('报警已处理')
   alarmDialogVisible.value = false
 }
 
-function clearAlarms() {
-  ElMessage.success('已清除已处理的报警记录')
+function clearHandledAlarms() {
+  ElMessageBox.confirm(
+    `确定要清除所有已处理的 ${handledAlarmCount.value} 条报警记录吗？未处理的报警不会被删除。`,
+    '清除确认',
+    {
+      confirmButtonText: '确定清除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(() => {
+    store.clearHandledAlarms()
+    ElMessage.success(`已清除 ${handledAlarmCount.value} 条已处理报警记录`)
+  }).catch(() => {})
 }
 
 function testBackupPower() {
@@ -488,25 +550,16 @@ let tempUpdateInterval: ReturnType<typeof setInterval> | null = null
 
 function startTemperatureSimulation() {
   tempUpdateInterval = setInterval(() => {
-    cabinets.value.forEach(cabinet => {
-      const variation = (Math.random() - 0.5) * 1
-      const newTemp = Math.round((cabinet.temperature + variation) * 10) / 10
-      
-      if (Math.random() < 0.05) {
-        store.addTemperatureRecord(cabinet.id, newTemp)
-      }
-    })
-    
+    store.updateTemperatures()
     renderAllTempChart()
-    
-    if (Math.random() < 0.02) {
-      const faultCabinet = cabinets.value[Math.floor(Math.random() * cabinets.value.length)]
-      const abnormalTemp = -5 + Math.random() * 5
-      store.addTemperatureRecord(faultCabinet.id, Math.round(abnormalTemp * 10) / 10)
-      ElMessage.warning(`柜位 ${faultCabinet.code} 温度异常: ${abnormalTemp.toFixed(1)}°C`)
-    }
   }, 10000)
 }
+
+watch([cabinets, temperatureAlarms], () => {
+  if (allTempChart) {
+    renderAllTempChart()
+  }
+}, { deep: true })
 
 onMounted(() => {
   nextTick(() => {
@@ -594,6 +647,12 @@ onUnmounted(() => {
 .card-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+}
+
+.alarm-header-actions {
+  display: flex;
+  gap: 10px;
   align-items: center;
 }
 
@@ -752,6 +811,21 @@ onUnmounted(() => {
 
 .alarm-handle {
   padding: 10px 0;
+}
+
+.handler-info {
+  font-size: 12px;
+  color: #67c23a;
+}
+
+.handler-remarks {
+  font-size: 11px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+.text-muted {
+  color: #c0c4cc;
 }
 
 .monitor-row {

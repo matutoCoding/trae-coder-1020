@@ -305,6 +305,78 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="addDeviceDialogVisible" title="添加设备" width="600px">
+      <div class="add-device-form">
+        <el-form :model="addDeviceForm" :rules="addDeviceRules" ref="addDeviceFormRef" label-width="100px">
+          <el-form-item label="设备名称" prop="name">
+            <el-input v-model="addDeviceForm.name" placeholder="请输入设备名称" />
+          </el-form-item>
+          <el-form-item label="设备型号" prop="model">
+            <el-input v-model="addDeviceForm.model" placeholder="请输入设备型号" />
+          </el-form-item>
+          <el-form-item label="安装日期" prop="installDate">
+            <el-date-picker 
+              v-model="addDeviceForm.installDate" 
+              type="date" 
+              placeholder="选择安装日期" 
+              style="width: 100%"
+              value-format="YYYY-MM-DD"
+            />
+          </el-form-item>
+          <el-form-item label="运行状态" prop="status">
+            <el-radio-group v-model="addDeviceForm.status">
+              <el-radio value="normal">正常</el-radio>
+              <el-radio value="warning">预警</el-radio>
+              <el-radio value="fault">故障</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="供电状态" prop="powerStatus">
+            <el-radio-group v-model="addDeviceForm.powerStatus">
+              <el-radio value="main">主电源</el-radio>
+              <el-radio value="backup">备用电源</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="温度(°C)" prop="temperature">
+                <el-input-number v-model="addDeviceForm.temperature" :min="-30" :max="30" :step="0.1" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="湿度(%)" prop="humidity">
+                <el-input-number v-model="addDeviceForm.humidity" :min="0" :max="100" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-form-item label="上次维护" prop="lastMaintenanceDate">
+            <el-date-picker 
+              v-model="addDeviceForm.lastMaintenanceDate" 
+              type="date" 
+              placeholder="选择上次维护日期" 
+              style="width: 100%"
+              value-format="YYYY-MM-DD"
+            />
+          </el-form-item>
+          <el-form-item label="下次维保" prop="nextMaintenanceDate">
+            <el-date-picker 
+              v-model="addDeviceForm.nextMaintenanceDate" 
+              type="date" 
+              placeholder="选择下次维保日期" 
+              style="width: 100%"
+              value-format="YYYY-MM-DD"
+            />
+          </el-form-item>
+          <el-form-item label="备注">
+            <el-input v-model="addDeviceForm.remarks" type="textarea" :rows="2" placeholder="请输入备注信息" />
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="addDeviceDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitAddDevice">确认添加</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="recordUpdateDialogVisible" title="更新维保状态" width="500px">
       <div v-if="selectedRecord" class="record-update">
         <el-descriptions :column="1" border>
@@ -386,6 +458,7 @@ function isOverdue(date: string) {
 }
 
 const deviceDialogVisible = ref(false)
+const addDeviceDialogVisible = ref(false)
 const maintenanceDialogVisible = ref(false)
 const disinfectionDialogVisible = ref(false)
 const recordUpdateDialogVisible = ref(false)
@@ -395,6 +468,31 @@ const selectedRecord = ref<MaintenanceRecord | null>(null)
 
 const maintenanceFormRef = ref<FormInstance>()
 const disinfectionFormRef = ref<FormInstance>()
+const addDeviceFormRef = ref<FormInstance>()
+
+const addDeviceForm = reactive({
+  name: '',
+  model: '',
+  installDate: dayjs().format('YYYY-MM-DD'),
+  status: 'normal' as DeviceInfo['status'],
+  powerStatus: 'main' as DeviceInfo['powerStatus'],
+  temperature: -18,
+  humidity: 60,
+  lastMaintenanceDate: dayjs().format('YYYY-MM-DD'),
+  nextMaintenanceDate: dayjs().add(30, 'day').format('YYYY-MM-DD'),
+  remarks: ''
+})
+
+const addDeviceRules: FormRules = {
+  name: [{ required: true, message: '请输入设备名称', trigger: 'blur' }],
+  model: [{ required: true, message: '请输入设备型号', trigger: 'blur' }],
+  installDate: [{ required: true, message: '请选择安装日期', trigger: 'change' }],
+  status: [{ required: true, message: '请选择运行状态', trigger: 'change' }],
+  powerStatus: [{ required: true, message: '请选择供电状态', trigger: 'change' }],
+  temperature: [{ required: true, message: '请输入温度', trigger: 'blur' }],
+  humidity: [{ required: true, message: '请输入湿度', trigger: 'blur' }],
+  nextMaintenanceDate: [{ required: true, message: '请选择下次维保日期', trigger: 'change' }]
+}
 
 const maintenanceForm = reactive({
   deviceId: '',
@@ -448,7 +546,41 @@ function viewDeviceDetail(device: DeviceInfo) {
 }
 
 function openAddDeviceDialog() {
-  ElMessage.info('添加设备功能待开发')
+  addDeviceForm.name = ''
+  addDeviceForm.model = ''
+  addDeviceForm.installDate = dayjs().format('YYYY-MM-DD')
+  addDeviceForm.status = 'normal'
+  addDeviceForm.powerStatus = 'main'
+  addDeviceForm.temperature = -18
+  addDeviceForm.humidity = 60
+  addDeviceForm.lastMaintenanceDate = dayjs().format('YYYY-MM-DD')
+  addDeviceForm.nextMaintenanceDate = dayjs().add(30, 'day').format('YYYY-MM-DD')
+  addDeviceForm.remarks = ''
+  addDeviceDialogVisible.value = true
+}
+
+async function submitAddDevice() {
+  if (!addDeviceFormRef.value) return
+  
+  await addDeviceFormRef.value.validate((valid) => {
+    if (!valid) return
+    
+    store.addDevice({
+      name: addDeviceForm.name,
+      model: addDeviceForm.model,
+      installDate: addDeviceForm.installDate,
+      status: addDeviceForm.status,
+      powerStatus: addDeviceForm.powerStatus,
+      temperature: addDeviceForm.temperature,
+      humidity: addDeviceForm.humidity,
+      lastMaintenanceDate: addDeviceForm.lastMaintenanceDate,
+      nextMaintenanceDate: addDeviceForm.nextMaintenanceDate,
+      remarks: addDeviceForm.remarks || undefined
+    })
+    
+    ElMessage.success('设备添加成功')
+    addDeviceDialogVisible.value = false
+  })
 }
 
 function openMaintenanceDialog(device?: DeviceInfo) {
@@ -632,6 +764,7 @@ function viewRecordDetail(record: MaintenanceRecord) {
 }
 
 .device-detail,
+.add-device-form,
 .maintenance-form,
 .disinfection-form,
 .record-update {

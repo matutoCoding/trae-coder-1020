@@ -127,7 +127,10 @@ export interface StatisticsData {
   overdueBodies: number
   monthlyInCount: number
   monthlyOutCount: number
+  weeklyInCount?: number
+  weeklyOutCount?: number
   turnoverRate: number
+  utilizationRate: number
   monthlyRevenue: number
 }
 
@@ -141,6 +144,8 @@ export interface OverdueReminder {
   maxDays: number
   overdueDays: number
   notified: boolean
+  notifyTime?: string
+  notifyOperator?: string
 }
 
 export interface TemperatureAlarm {

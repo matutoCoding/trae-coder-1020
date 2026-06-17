@@ -126,11 +126,17 @@
                 <span class="amount">¥{{ row.storageDays * DAILY_RATE }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="是否已通知" width="120">
+            <el-table-column label="通知状态" width="200">
               <template #default="{ row }">
-                <el-tag :type="row.notified ? 'success' : 'warning'">
-                  {{ row.notified ? '已通知' : '未通知' }}
-                </el-tag>
+                <div>
+                  <el-tag :type="row.notified ? 'success' : 'warning'">
+                    {{ row.notified ? '已通知' : '未通知' }}
+                  </el-tag>
+                  <div v-if="row.notified" class="notify-detail">
+                    <span>{{ row.notifyOperator }}</span>
+                    <span class="notify-time">{{ row.notifyTime }}</span>
+                  </div>
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="操作" width="200" fixed="right">
@@ -141,7 +147,7 @@
                   @click="notifyFamily(row)"
                   :disabled="row.notified"
                 >
-                  标记已通知
+                  {{ row.notified ? '已通知' : '标记已通知' }}
                 </el-button>
                 <el-button type="danger" size="small" @click="urgentProcess(row)">
                   紧急处理
@@ -189,6 +195,9 @@
               <el-radio value="alipay">支付宝</el-radio>
               <el-radio value="card">银行卡</el-radio>
             </el-radio-group>
+          </el-form-item>
+          <el-form-item label="经办人">
+            <el-input v-model="paymentForm.operator" placeholder="请输入经办人姓名" />
           </el-form-item>
           <el-form-item label="备注">
             <el-input v-model="paymentForm.remarks" type="textarea" :rows="2" placeholder="请输入备注信息" />
@@ -243,6 +252,41 @@
           </el-descriptions>
         </div>
       </div>
+    </el-dialog>
+
+    <el-dialog v-model="notifyDialogVisible" title="标记通知家属" width="500px">
+      <div v-if="notifyReminder" class="notify-content">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="姓名">{{ notifyReminder.bodyName }}</el-descriptions-item>
+          <el-descriptions-item label="柜位">{{ notifyReminder.cabinetCode }}</el-descriptions-item>
+          <el-descriptions-item label="入柜时间">{{ notifyReminder.enterTime }}</el-descriptions-item>
+          <el-descriptions-item label="已寄存">{{ notifyReminder.storageDays }}天</el-descriptions-item>
+          <el-descriptions-item label="超期天数">
+            <el-tag type="danger">{{ notifyReminder.overdueDays }}天</el-tag>
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <el-form :model="notifyForm" label-width="80px" style="margin-top: 20px">
+          <el-form-item label="经办人" required>
+            <el-input v-model="notifyForm.operator" placeholder="请输入经办人姓名" />
+          </el-form-item>
+          <el-form-item label="通知方式">
+            <el-select v-model="notifyForm.method" placeholder="请选择通知方式" style="width: 100%">
+              <el-option label="电话通知" value="phone" />
+              <el-option label="短信通知" value="sms" />
+              <el-option label="书面通知" value="written" />
+              <el-option label="当面通知" value="inperson" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="备注">
+            <el-input v-model="notifyForm.remarks" type="textarea" :rows="2" placeholder="请输入备注信息" />
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="notifyDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitNotify">确认标记</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -302,8 +346,11 @@ function calculateRemaining(record: BillingRecord) {
 
 const paymentDialogVisible = ref(false)
 const detailDialogVisible = ref(false)
+const notifyDialogVisible = ref(false)
+
 const selectedBilling = ref<BillingRecord | null>(null)
 const detailBilling = ref<BillingRecord | null>(null)
+const notifyReminder = ref<OverdueReminder | null>(null)
 
 const currentBody = computed(() => {
   if (!detailBilling.value) return null
@@ -313,6 +360,13 @@ const currentBody = computed(() => {
 const paymentForm = reactive({
   amount: 0,
   method: 'cash' as 'cash' | 'wechat' | 'alipay' | 'card',
+  operator: '',
+  remarks: ''
+})
+
+const notifyForm = reactive({
+  operator: '',
+  method: 'phone' as 'phone' | 'sms' | 'written' | 'inperson',
   remarks: ''
 })
 
@@ -320,6 +374,7 @@ function openPaymentDialog(record: BillingRecord) {
   selectedBilling.value = record
   paymentForm.amount = calculateRemaining(record)
   paymentForm.method = 'cash'
+  paymentForm.operator = ''
   paymentForm.remarks = ''
   paymentDialogVisible.value = true
 }
@@ -331,6 +386,11 @@ function viewBillingDetail(record: BillingRecord) {
 
 function submitPayment() {
   if (!selectedBilling.value) return
+  
+  if (!paymentForm.operator.trim()) {
+    ElMessage.warning('请输入经办人姓名')
+    return
+  }
   
   if (paymentForm.amount <= 0) {
     ElMessage.warning('请输入有效的缴费金额')
@@ -344,13 +404,29 @@ function submitPayment() {
   
   store.updateBillingPayment(selectedBilling.value.id, paymentForm.amount)
   
-  ElMessage.success('缴费成功')
+  ElMessage.success(`缴费成功，已缴费 ¥${paymentForm.amount}`)
   paymentDialogVisible.value = false
 }
 
 function notifyFamily(reminder: OverdueReminder) {
-  reminder.notified = true
+  notifyReminder.value = reminder
+  notifyForm.operator = ''
+  notifyForm.method = 'phone'
+  notifyForm.remarks = ''
+  notifyDialogVisible.value = true
+}
+
+function submitNotify() {
+  if (!notifyReminder.value) return
+  
+  if (!notifyForm.operator.trim()) {
+    ElMessage.warning('请输入经办人姓名')
+    return
+  }
+  
+  store.markOverdueNotified(notifyReminder.value.bodyId, notifyForm.operator)
   ElMessage.success('已标记为已通知家属')
+  notifyDialogVisible.value = false
 }
 
 function urgentProcess(reminder: OverdueReminder) {
@@ -407,11 +483,26 @@ function urgentProcess(reminder: OverdueReminder) {
 }
 
 .payment-content,
-.detail-content {
+.detail-content,
+.notify-content {
   padding: 10px 0;
 }
 
 .body-info {
   margin-top: 20px;
+}
+
+.notify-detail {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #909399;
+  display: flex;
+  flex-direction: column;
+  
+  .notify-time {
+    font-size: 11px;
+    color: #c0c4cc;
+    margin-top: 2px;
+  }
 }
 </style>

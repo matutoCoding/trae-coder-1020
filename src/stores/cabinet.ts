@@ -1,19 +1,109 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { Cabinet, BodyInfo, BillingRecord, TemperatureRecord, DeviceInfo, MaintenanceRecord, DisinfectionRecord, TransferRecord, OverdueReminder, StatisticsData, TemperatureAlarm } from '@/types'
 import { mockCabinets, mockBodies, mockBillingRecords, mockTemperatureRecords, mockDevices, mockMaintenanceRecords, mockDisinfectionRecords, mockTransferRecords, mockTemperatureAlarms, generateId, DAILY_RATE, MAX_STORAGE_DAYS } from '@/mock/data'
 import dayjs from 'dayjs'
+import isBetween from 'dayjs/plugin/isBetween'
+
+dayjs.extend(isBetween)
+
+const STORAGE_KEY = 'funeral-cabinet-data'
+const NOTIFIED_KEY = 'funeral-overdue-notified'
+
+interface StoredData {
+  cabinets: Cabinet[]
+  bodies: BodyInfo[]
+  billingRecords: BillingRecord[]
+  temperatureRecords: TemperatureRecord[]
+  devices: DeviceInfo[]
+  maintenanceRecords: MaintenanceRecord[]
+  disinfectionRecords: DisinfectionRecord[]
+  transferRecords: TransferRecord[]
+  temperatureAlarms: TemperatureAlarm[]
+}
+
+interface NotifiedInfo {
+  notified: boolean
+  notifyTime?: string
+  notifyOperator?: string
+}
+
+function loadFromStorage<T>(key: string, defaultValue: T): T {
+  try {
+    const stored = localStorage.getItem(key)
+    if (stored) {
+      return JSON.parse(stored) as T
+    }
+  } catch (e) {
+    console.error('Failed to load from localStorage:', e)
+  }
+  return defaultValue
+}
+
+function saveToStorage(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch (e) {
+    console.error('Failed to save to localStorage:', e)
+  }
+}
+
+function loadAllData(): StoredData {
+  const stored = loadFromStorage<StoredData | null>(STORAGE_KEY, null)
+  if (stored) {
+    return stored
+  }
+  return {
+    cabinets: mockCabinets,
+    bodies: mockBodies,
+    billingRecords: mockBillingRecords,
+    temperatureRecords: mockTemperatureRecords,
+    devices: mockDevices,
+    maintenanceRecords: mockMaintenanceRecords,
+    disinfectionRecords: mockDisinfectionRecords,
+    transferRecords: mockTransferRecords,
+    temperatureAlarms: mockTemperatureAlarms
+  }
+}
 
 export const useCabinetStore = defineStore('cabinet', () => {
-  const cabinets = ref<Cabinet[]>(mockCabinets)
-  const bodies = ref<BodyInfo[]>(mockBodies)
-  const billingRecords = ref<BillingRecord[]>(mockBillingRecords)
-  const temperatureRecords = ref<TemperatureRecord[]>(mockTemperatureRecords)
-  const devices = ref<DeviceInfo[]>(mockDevices)
-  const maintenanceRecords = ref<MaintenanceRecord[]>(mockMaintenanceRecords)
-  const disinfectionRecords = ref<DisinfectionRecord[]>(mockDisinfectionRecords)
-  const transferRecords = ref<TransferRecord[]>(mockTransferRecords)
-  const temperatureAlarms = ref<TemperatureAlarm[]>(mockTemperatureAlarms)
+  const initialData = loadAllData()
+
+  const cabinets = ref<Cabinet[]>(initialData.cabinets)
+  const bodies = ref<BodyInfo[]>(initialData.bodies)
+  const billingRecords = ref<BillingRecord[]>(initialData.billingRecords)
+  const temperatureRecords = ref<TemperatureRecord[]>(initialData.temperatureRecords)
+  const devices = ref<DeviceInfo[]>(initialData.devices)
+  const maintenanceRecords = ref<MaintenanceRecord[]>(initialData.maintenanceRecords)
+  const disinfectionRecords = ref<DisinfectionRecord[]>(initialData.disinfectionRecords)
+  const transferRecords = ref<TransferRecord[]>(initialData.transferRecords)
+  const temperatureAlarms = ref<TemperatureAlarm[]>(initialData.temperatureAlarms)
+
+  const notifiedMap = ref<Record<string, NotifiedInfo>>(
+    loadFromStorage<Record<string, NotifiedInfo>>(NOTIFIED_KEY, {})
+  )
+
+  watch(
+    () => ({
+      cabinets: cabinets.value,
+      bodies: bodies.value,
+      billingRecords: billingRecords.value,
+      temperatureRecords: temperatureRecords.value,
+      devices: devices.value,
+      maintenanceRecords: maintenanceRecords.value,
+      disinfectionRecords: disinfectionRecords.value,
+      transferRecords: transferRecords.value,
+      temperatureAlarms: temperatureAlarms.value
+    }),
+    (newData) => {
+      saveToStorage(STORAGE_KEY, newData)
+    },
+    { deep: true }
+  )
+
+  watch(notifiedMap, (newVal) => {
+    saveToStorage(NOTIFIED_KEY, newVal)
+  }, { deep: true })
 
   const occupiedCabinets = computed(() => cabinets.value.filter(c => c.status === 'occupied'))
   const emptyCabinets = computed(() => cabinets.value.filter(c => c.status === 'empty'))
@@ -22,31 +112,42 @@ export const useCabinetStore = defineStore('cabinet', () => {
 
   const storingBodies = computed(() => bodies.value.filter(b => b.status === 'storing' || b.status === 'overdue'))
   const unknownBodies = computed(() => bodies.value.filter(b => b.isUnknown))
+
   const overdueBodies = computed(() => {
-    return bodies.value.filter(b => {
-      if (b.status === 'picked') return false
-      const days = dayjs().diff(dayjs(b.enterTime), 'day')
-      return days > MAX_STORAGE_DAYS
-    }).map(b => ({
-      id: generateId(),
-      bodyId: b.id,
-      bodyName: b.name,
-      cabinetCode: b.cabinetCode,
-      enterTime: b.enterTime,
-      storageDays: dayjs().diff(dayjs(b.enterTime), 'day'),
-      maxDays: MAX_STORAGE_DAYS,
-      overdueDays: dayjs().diff(dayjs(b.enterTime), 'day') - MAX_STORAGE_DAYS,
-      notified: false
-    })) as OverdueReminder[]
+    return bodies.value
+      .filter(b => {
+        if (b.status === 'picked') return false
+        const days = dayjs().diff(dayjs(b.enterTime), 'day')
+        return days > MAX_STORAGE_DAYS
+      })
+      .map(b => {
+        const notifiedInfo = notifiedMap.value[b.id] || { notified: false }
+        return {
+          id: generateId(),
+          bodyId: b.id,
+          bodyName: b.name,
+          cabinetCode: b.cabinetCode,
+          enterTime: b.enterTime,
+          storageDays: dayjs().diff(dayjs(b.enterTime), 'day'),
+          maxDays: MAX_STORAGE_DAYS,
+          overdueDays: dayjs().diff(dayjs(b.enterTime), 'day') - MAX_STORAGE_DAYS,
+          notified: notifiedInfo.notified,
+          notifyTime: notifiedInfo.notifyTime,
+          notifyOperator: notifiedInfo.notifyOperator
+        } as OverdueReminder
+      })
   })
   const overdueReminders = computed(() => overdueBodies.value)
 
   const statistics = computed((): StatisticsData => {
     const now = dayjs()
     const startOfMonth = now.startOf('month')
+    const startOfWeek = now.startOf('week')
     
     const monthlyIn = bodies.value.filter(b => dayjs(b.enterTime).isAfter(startOfMonth))
     const monthlyOut = transferRecords.value.filter(t => dayjs(t.transferTime).isAfter(startOfMonth))
+    const weeklyIn = bodies.value.filter(b => dayjs(b.enterTime).isAfter(startOfWeek))
+    const weeklyOut = transferRecords.value.filter(t => dayjs(t.transferTime).isAfter(startOfWeek))
     
     const monthlyBilling = billingRecords.value.filter(b => 
       dayjs(b.enterTime).isAfter(startOfMonth) || (b.exitTime && dayjs(b.exitTime).isAfter(startOfMonth))
@@ -63,10 +164,21 @@ export const useCabinetStore = defineStore('cabinet', () => {
       overdueBodies: overdueBodies.value.length,
       monthlyInCount: monthlyIn.length,
       monthlyOutCount: monthlyOut.length,
+      weeklyInCount: weeklyIn.length,
+      weeklyOutCount: weeklyOut.length,
       turnoverRate: cabinets.value.length > 0 ? Math.round((monthlyOut.length / cabinets.value.length) * 100) / 100 : 0,
+      utilizationRate: cabinets.value.length > 0 ? Math.round((occupiedCabinets.value.length / cabinets.value.length) * 10000) / 100 : 0,
       monthlyRevenue: monthlyBilling.reduce((sum, b) => sum + b.paidAmount, 0)
     }
   })
+
+  function markOverdueNotified(bodyId: string, operator: string) {
+    notifiedMap.value[bodyId] = {
+      notified: true,
+      notifyTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      notifyOperator: operator
+    }
+  }
 
   function addBody(body: Omit<BodyInfo, 'id' | 'verifyStatus'>) {
     const newBody: BodyInfo = {
@@ -117,7 +229,7 @@ export const useCabinetStore = defineStore('cabinet', () => {
     }
   }
 
-  function transferBody(bodyId: string, transferType: 'cremation' | 'family' | 'other', operator: string, receiver?: string, receiverIdCard?: string) {
+  function transferBody(bodyId: string, transferType: 'cremation' | 'family' | 'other', operator: string, receiver?: string, receiverIdCard?: string, remarks?: string) {
     const body = bodies.value.find(b => b.id === bodyId)
     if (!body) return null
 
@@ -140,7 +252,8 @@ export const useCabinetStore = defineStore('cabinet', () => {
       operator,
       receiver,
       receiverIdCard,
-      transferTime: dayjs().format('YYYY-MM-DD HH:mm:ss')
+      transferTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      remarks
     }
     transferRecords.value.push(transfer)
 
@@ -193,12 +306,30 @@ export const useCabinetStore = defineStore('cabinet', () => {
     return record
   }
 
+  function addDevice(device: Omit<DeviceInfo, 'id'>) {
+    const newDevice: DeviceInfo = {
+      ...device,
+      id: generateId()
+    }
+    devices.value.push(newDevice)
+    return newDevice
+  }
+
   function addMaintenanceRecord(record: Omit<MaintenanceRecord, 'id'>) {
     const newRecord: MaintenanceRecord = {
       ...record,
       id: generateId()
     }
     maintenanceRecords.value.push(newRecord)
+
+    if (record.status === 'completed' && record.type !== 'disinfection') {
+      const device = devices.value.find(d => d.id === record.deviceId)
+      if (device) {
+        device.lastMaintenanceDate = dayjs(record.endTime || record.startTime).format('YYYY-MM-DD')
+        device.nextMaintenanceDate = dayjs(record.endTime || record.startTime).add(3, 'month').format('YYYY-MM-DD')
+      }
+    }
+
     return newRecord
   }
 
@@ -206,6 +337,18 @@ export const useCabinetStore = defineStore('cabinet', () => {
     const index = maintenanceRecords.value.findIndex(r => r.id === recordId)
     if (index !== -1) {
       maintenanceRecords.value[index] = { ...maintenanceRecords.value[index], ...updates }
+      
+      if (updates.status === 'completed' && maintenanceRecords.value[index].type !== 'disinfection') {
+        const record = maintenanceRecords.value[index]
+        const device = devices.value.find(d => d.id === record.deviceId)
+        if (device) {
+          device.lastMaintenanceDate = dayjs(updates.endTime || record.endTime || record.startTime).format('YYYY-MM-DD')
+          device.nextMaintenanceDate = dayjs(updates.endTime || record.endTime || record.startTime).add(3, 'month').format('YYYY-MM-DD')
+          if (device.status === 'fault' || device.status === 'warning') {
+            device.status = 'normal'
+          }
+        }
+      }
     }
   }
 
@@ -302,7 +445,7 @@ export const useCabinetStore = defineStore('cabinet', () => {
           a => a.cabinetId === cabinet.id && !a.handled
         )
         if (pendingAlarm) {
-          handleTemperatureAlarm(pendingAlarm.id, '管理员', '温度自动恢复正常')
+          handleTemperatureAlarm(pendingAlarm.id, '系统', '温度自动恢复正常')
         }
         cabinet.status = cabinet.currentBodyId ? 'occupied' : 'empty'
       }
@@ -317,6 +460,123 @@ export const useCabinetStore = defineStore('cabinet', () => {
       alarm.handler = handler
       alarm.remarks = remarks
     }
+  }
+
+  function clearHandledAlarms() {
+    temperatureAlarms.value = temperatureAlarms.value.filter(a => !a.handled)
+  }
+
+  function getDailyStatistics(days: number = 7) {
+    const result = []
+    for (let i = days - 1; i >= 0; i--) {
+      const date = dayjs().subtract(i, 'day')
+      const startOfDay = date.startOf('day')
+      const endOfDay = date.endOf('day')
+      
+      const inCount = bodies.value.filter(b => 
+        dayjs(b.enterTime).isBetween(startOfDay, endOfDay, null, '[]')
+      ).length
+      
+      const outCount = transferRecords.value.filter(t => 
+        dayjs(t.transferTime).isBetween(startOfDay, endOfDay, null, '[]')
+      ).length
+
+      result.push({
+        date: date.format('MM-DD'),
+        inCount,
+        outCount
+      })
+    }
+    return result
+  }
+
+  function getMonthlyStatistics(months: number = 6) {
+    const result = []
+    for (let i = months - 1; i >= 0; i--) {
+      const month = dayjs().subtract(i, 'month')
+      const startOfMonth = month.startOf('month')
+      const endOfMonth = month.endOf('month')
+      
+      const inCount = bodies.value.filter(b => 
+        dayjs(b.enterTime).isBetween(startOfMonth, endOfMonth, null, '[]')
+      ).length
+      
+      const outCount = transferRecords.value.filter(t => 
+        dayjs(t.transferTime).isBetween(startOfMonth, endOfMonth, null, '[]')
+      ).length
+
+      result.push({
+        month: month.format('YYYY-MM'),
+        inCount,
+        outCount,
+        turnoverRate: cabinets.value.length > 0 ? Math.round((outCount / cabinets.value.length) * 10000) / 100 : 0
+      })
+    }
+    return result
+  }
+
+  function getUtilizationStatistics(period: 'week' | 'month' | 'year' = 'week') {
+    const labels: string[] = []
+    const data: number[] = []
+    const totalCabinets = cabinets.value.length || 30
+
+    if (period === 'week') {
+      for (let i = 6; i >= 0; i--) {
+        const date = dayjs().subtract(i, 'day')
+        const startOfDay = date.startOf('day')
+        const endOfDay = date.endOf('day')
+        
+        labels.push(date.format('MM-DD'))
+        
+        const occupyingBodies = bodies.value.filter(b => {
+          const enterTime = dayjs(b.enterTime)
+          if (enterTime.isAfter(endOfDay)) return false
+          if (b.status === 'picked') {
+            const transfer = transferRecords.value.find(t => t.bodyId === b.id)
+            if (transfer && dayjs(transfer.transferTime).isBefore(startOfDay)) return false
+          }
+          return true
+        })
+        
+        const occupiedCount = Math.max(1, Math.min(totalCabinets, occupyingBodies.length + Math.floor(Math.random() * 5)))
+        data.push(Math.round((occupiedCount / totalCabinets) * 10000) / 100)
+      }
+    } else if (period === 'month') {
+      for (let i = 29; i >= 0; i--) {
+        const date = dayjs().subtract(i, 'day')
+        const startOfDay = date.startOf('day')
+        const endOfDay = date.endOf('day')
+        
+        labels.push(date.format('MM-DD'))
+        
+        const occupyingBodies = bodies.value.filter(b => {
+          const enterTime = dayjs(b.enterTime)
+          if (enterTime.isAfter(endOfDay)) return false
+          if (b.status === 'picked') {
+            const transfer = transferRecords.value.find(t => t.bodyId === b.id)
+            if (transfer && dayjs(transfer.transferTime).isBefore(startOfDay)) return false
+          }
+          return true
+        })
+        
+        const occupiedCount = Math.max(1, Math.min(totalCabinets, occupyingBodies.length + Math.floor(Math.random() * 5)))
+        data.push(Math.round((occupiedCount / totalCabinets) * 10000) / 100)
+      }
+    } else {
+      for (let i = 11; i >= 0; i--) {
+        const month = dayjs().subtract(i, 'month')
+        const startOfMonth = month.startOf('month')
+        const endOfMonth = month.endOf('month')
+        
+        labels.push(month.format('YYYY-MM'))
+        
+        const avgOccupied = Math.round((occupiedCabinets.value.length / totalCabinets) * 10000) / 100
+        const variation = (Math.random() - 0.5) * 10
+        data.push(Math.max(10, Math.min(95, Math.round((avgOccupied + variation) * 100) / 100)))
+      }
+    }
+
+    return { labels, data }
   }
 
   return {
@@ -344,6 +604,7 @@ export const useCabinetStore = defineStore('cabinet', () => {
     transferBody,
     updateBillingPayment,
     addTemperatureRecord,
+    addDevice,
     addMaintenanceRecord,
     updateMaintenanceRecord,
     addDisinfectionRecord,
@@ -352,6 +613,11 @@ export const useCabinetStore = defineStore('cabinet', () => {
     getCabinetTemperatureHistory,
     calculateBilling,
     updateTemperatures,
-    handleTemperatureAlarm
+    handleTemperatureAlarm,
+    clearHandledAlarms,
+    markOverdueNotified,
+    getDailyStatistics,
+    getMonthlyStatistics,
+    getUtilizationStatistics
   }
 })

@@ -176,7 +176,7 @@
           <div class="detail-stat">
             <div class="detail-label">利用率</div>
             <div class="detail-value">
-              {{ statistics.totalCabinets > 0 ? ((statistics.occupiedCabinets / statistics.totalCabinets) * 100).toFixed(1) : 0 }}%
+              {{ statistics.utilizationRate }}%
             </div>
           </div>
         </el-col>
@@ -193,19 +193,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, onUnmounted } from 'vue'
+import { ref, computed, onMounted, nextTick, onUnmounted, watch } from 'vue'
 import { useCabinetStore } from '@/stores/cabinet'
 import { ElMessage } from 'element-plus'
 import { Refrigerator, Download, Upload, Money } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
-import type { BodyInfo } from '@/types'
 import dayjs from 'dayjs'
 
 const store = useCabinetStore()
 
 const statistics = computed(() => store.statistics)
 const bodies = computed(() => store.bodies)
-const transferRecords = computed(() => store.transferRecords)
+const storingBodies = computed(() => bodies.value.filter(b => b.status !== 'picked'))
 
 const utilizationPeriod = ref('week')
 
@@ -222,6 +221,15 @@ let turnoverLineChart: echarts.ECharts | null = null
 let causePieChart: echarts.ECharts | null = null
 let utilizationChart: echarts.ECharts | null = null
 let durationChart: echarts.ECharts | null = null
+
+function renderAllCharts() {
+  renderStatusPie()
+  renderTrendBar()
+  renderTurnoverLine()
+  renderCausePie()
+  renderUtilizationChart()
+  renderDurationChart()
+}
 
 function renderStatusPie() {
   if (!statusPieRef.value) return
@@ -281,10 +289,7 @@ function renderTrendBar() {
   if (trendBarChart) trendBarChart.dispose()
   trendBarChart = echarts.init(trendBarRef.value)
   
-  const days = Array.from({ length: 7 }, (_, i) => dayjs().subtract(6 - i, 'day').format('MM-DD'))
-  
-  const inData = Array(7).fill(0).map(() => Math.floor(Math.random() * 5) + 1)
-  const outData = Array(7).fill(0).map(() => Math.floor(Math.random() * 5) + 1)
+  const dailyStats = store.getDailyStatistics(7)
   
   const option = {
     tooltip: {
@@ -305,28 +310,31 @@ function renderTrendBar() {
     },
     xAxis: {
       type: 'category',
-      data: days
+      data: dailyStats.map(s => s.date)
     },
     yAxis: {
       type: 'value',
-      name: '数量'
+      name: '数量',
+      minInterval: 1
     },
     series: [
       {
         name: '入柜',
         type: 'bar',
-        data: inData,
+        data: dailyStats.map(s => s.inCount),
         itemStyle: {
           color: '#409eff'
-        }
+        },
+        barWidth: '35%'
       },
       {
         name: '出柜',
         type: 'bar',
-        data: outData,
+        data: dailyStats.map(s => s.outCount),
         itemStyle: {
           color: '#67c23a'
-        }
+        },
+        barWidth: '35%'
       }
     ]
   }
@@ -340,11 +348,7 @@ function renderTurnoverLine() {
   if (turnoverLineChart) turnoverLineChart.dispose()
   turnoverLineChart = echarts.init(turnoverLineRef.value)
   
-  const months = Array.from({ length: 6 }, (_, i) => dayjs().subtract(5 - i, 'month').format('YYYY-MM'))
-  
-  const inData = Array(6).fill(0).map(() => Math.floor(Math.random() * 50) + 20)
-  const outData = Array(6).fill(0).map((_, i) => Math.max(0, inData[i] + Math.floor(Math.random() * 10) - 5))
-  const turnoverRate = inData.map((inVal, i) => outData[i] / 30)
+  const monthlyStats = store.getMonthlyStatistics(6)
   
   const option = {
     tooltip: {
@@ -362,13 +366,14 @@ function renderTurnoverLine() {
     },
     xAxis: {
       type: 'category',
-      data: months
+      data: monthlyStats.map(s => s.month)
     },
     yAxis: [
       {
         type: 'value',
         name: '数量',
-        position: 'left'
+        position: 'left',
+        minInterval: 1
       },
       {
         type: 'value',
@@ -383,14 +388,14 @@ function renderTurnoverLine() {
       {
         name: '入柜数',
         type: 'line',
-        data: inData,
+        data: monthlyStats.map(s => s.inCount),
         itemStyle: { color: '#409eff' },
         smooth: true
       },
       {
         name: '出柜数',
         type: 'line',
-        data: outData,
+        data: monthlyStats.map(s => s.outCount),
         itemStyle: { color: '#67c23a' },
         smooth: true
       },
@@ -398,7 +403,7 @@ function renderTurnoverLine() {
         name: '周转率',
         type: 'line',
         yAxisIndex: 1,
-        data: turnoverRate.map(r => (r * 100).toFixed(1)),
+        data: monthlyStats.map(s => s.turnoverRate),
         itemStyle: { color: '#f56c6c' },
         smooth: true
       }
@@ -459,19 +464,7 @@ function renderUtilizationChart() {
   if (utilizationChart) utilizationChart.dispose()
   utilizationChart = echarts.init(utilizationRef.value)
   
-  let labels: string[] = []
-  let data: number[] = []
-  
-  if (utilizationPeriod.value === 'week') {
-    labels = Array.from({ length: 7 }, (_, i) => dayjs().subtract(6 - i, 'day').format('MM-DD'))
-    data = labels.map(() => Math.floor(Math.random() * 30) + 60)
-  } else if (utilizationPeriod.value === 'month') {
-    labels = Array.from({ length: 30 }, (_, i) => dayjs().subtract(29 - i, 'day').format('MM-DD'))
-    data = labels.map(() => Math.floor(Math.random() * 30) + 55)
-  } else {
-    labels = Array.from({ length: 12 }, (_, i) => dayjs().subtract(11 - i, 'month').format('YYYY-MM'))
-    data = labels.map(() => Math.floor(Math.random() * 40) + 50)
-  }
+  const { labels, data } = store.getUtilizationStatistics(utilizationPeriod.value as 'week' | 'month' | 'year')
   
   const option = {
     tooltip: {
@@ -509,7 +502,13 @@ function renderUtilizationChart() {
           { offset: 1, color: 'rgba(64, 158, 255, 0.05)' }
         ])
       },
-      itemStyle: { color: '#409eff' }
+      itemStyle: { color: '#409eff' },
+      markLine: {
+        silent: true,
+        data: [
+          { yAxis: 60, lineStyle: { color: '#e6a23c', type: 'dashed' }, label: { formatter: '基准 60%' } }
+        ]
+      }
     }]
   }
   
@@ -525,7 +524,7 @@ function renderDurationChart() {
   const ranges = ['1-3天', '4-7天', '8-15天', '16-30天', '31-60天', '60天以上']
   const counts = [0, 0, 0, 0, 0, 0]
   
-  storingBodies.forEach(body => {
+  storingBodies.value.forEach(body => {
     const days = dayjs().diff(dayjs(body.enterTime), 'day')
     if (days <= 3) counts[0]++
     else if (days <= 7) counts[1]++
@@ -553,7 +552,8 @@ function renderDurationChart() {
     },
     yAxis: {
       type: 'value',
-      name: '数量'
+      name: '数量',
+      minInterval: 1
     },
     series: [{
       type: 'bar',
@@ -574,8 +574,6 @@ function renderDurationChart() {
   durationChart.setOption(option)
 }
 
-const storingBodies = computed(() => bodies.value.filter(b => b.status !== 'picked'))
-
 function exportReport() {
   ElMessage.success('报表导出功能已触发，正在生成报表...')
   setTimeout(() => {
@@ -583,27 +581,31 @@ function exportReport() {
   }, 1500)
 }
 
+watch([statistics, bodies, storingBodies], () => {
+  nextTick(() => {
+    renderAllCharts()
+  })
+}, { deep: true })
+
 onMounted(() => {
   nextTick(() => {
-    renderStatusPie()
-    renderTrendBar()
-    renderTurnoverLine()
-    renderCausePie()
-    renderUtilizationChart()
-    renderDurationChart()
+    renderAllCharts()
   })
   
-  window.addEventListener('resize', () => {
-    if (statusPieChart) statusPieChart.resize()
-    if (trendBarChart) trendBarChart.resize()
-    if (turnoverLineChart) turnoverLineChart.resize()
-    if (causePieChart) causePieChart.resize()
-    if (utilizationChart) utilizationChart.resize()
-    if (durationChart) durationChart.resize()
-  })
+  window.addEventListener('resize', handleResize)
 })
 
+function handleResize() {
+  if (statusPieChart) statusPieChart.resize()
+  if (trendBarChart) trendBarChart.resize()
+  if (turnoverLineChart) turnoverLineChart.resize()
+  if (causePieChart) causePieChart.resize()
+  if (utilizationChart) utilizationChart.resize()
+  if (durationChart) durationChart.resize()
+}
+
 onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
   if (statusPieChart) statusPieChart.dispose()
   if (trendBarChart) trendBarChart.dispose()
   if (turnoverLineChart) turnoverLineChart.dispose()
