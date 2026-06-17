@@ -120,7 +120,9 @@ export interface TransferRecord {
   feeStatus?: 'paid' | 'partial' | 'unpaid'
   totalFee?: number
   paidFee?: number
+  dailyRate?: number
   storageDays?: number
+  enterTime?: string
   isUnknown?: boolean
   policeCertNo?: string
   processDestination?: string

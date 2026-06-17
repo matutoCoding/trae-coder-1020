@@ -607,6 +607,7 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { Search, Money, Document, Printer, Download, Warning } from '@element-plus/icons-vue'
 import type { BodyInfo, TransferRecord } from '@/types'
 import dayjs from 'dayjs'
+import html2canvas from 'html2canvas'
 
 const store = useCabinetStore()
 
@@ -830,6 +831,8 @@ function quickPayFull() {
 
 function buildOrderPreviewData(body: BodyInfo, form: typeof transferForm) {
   const billing = store.calculateBilling(body.id)
+  const billingRecord = store.billingRecords.find(b => b.bodyId === body.id && !b.exitTime)
+  const dailyRate = billingRecord?.dailyRate || billing.total / (billing.days || 1)
   orderPreviewData.bodyName = body.name
   orderPreviewData.gender = body.gender
   orderPreviewData.age = body.age
@@ -840,7 +843,7 @@ function buildOrderPreviewData(body: BodyInfo, form: typeof transferForm) {
   orderPreviewData.enterTime = body.enterTime
   orderPreviewData.transferTime = dayjs().format('YYYY-MM-DD HH:mm:ss')
   orderPreviewData.storageDays = billing.days
-  orderPreviewData.dailyRate = 50
+  orderPreviewData.dailyRate = dailyRate
   orderPreviewData.totalFee = billing.total
   orderPreviewData.paidFee = billing.paid
   orderPreviewData.feeStatus = billing.remaining <= 0 ? 'paid' : billing.paid > 0 ? 'partial' : 'unpaid'
@@ -871,10 +874,10 @@ function viewTransferOrder(record: TransferRecord) {
   orderPreviewData.causeOfDeath = body?.causeOfDeath
   orderPreviewData.deathTime = body?.deathTime || ''
   orderPreviewData.cabinetCode = record.cabinetCode
-  orderPreviewData.enterTime = body?.enterTime || ''
+  orderPreviewData.enterTime = record.enterTime || body?.enterTime || ''
   orderPreviewData.transferTime = record.transferTime
   orderPreviewData.storageDays = record.storageDays || 0
-  orderPreviewData.dailyRate = 50
+  orderPreviewData.dailyRate = record.dailyRate || 100
   orderPreviewData.totalFee = record.totalFee
   orderPreviewData.paidFee = record.paidFee
   orderPreviewData.feeStatus = record.feeStatus
@@ -925,11 +928,28 @@ function printTransferOrder() {
   }
 }
 
-function exportTransferOrder() {
-  ElMessage.success('交接单导出功能已触发，正在生成文件...')
-  setTimeout(() => {
-    ElMessage.success('交接单导出成功')
-  }, 1000)
+async function exportTransferOrder() {
+  if (!transferOrderRef.value) return
+  
+  try {
+    ElMessage.info('正在生成交接单图片...')
+    const canvas = await html2canvas(transferOrderRef.value, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false
+    })
+    
+    const link = document.createElement('a')
+    const fileName = `交接单_${orderPreviewData.bodyName}_${dayjs(orderPreviewData.transferTime).format('YYYYMMDDHHmmss')}.png`
+    link.download = fileName
+    link.href = canvas.toDataURL('image/png')
+    link.click()
+    
+    ElMessage.success('交接单已导出为图片')
+  } catch (e) {
+    ElMessage.error('导出失败，请重试')
+  }
 }
 
 function viewDetail(body: BodyInfo) {
@@ -947,6 +967,10 @@ async function submitTransfer() {
       ElMessage.error('请先结清费用后再办理出柜')
       return
     }
+    
+    const billingSnapshot = store.calculateBilling(selectedBody.value.id)
+    const billingRecord = store.billingRecords.find(b => b.bodyId === selectedBody.value!.id && !b.exitTime)
+    const dailyRate = billingRecord?.dailyRate || billingSnapshot.total / (billingSnapshot.days || 1)
     
     ElMessageBox.confirm(
       `确认将 ${selectedBody.value.name} 办理出柜手续吗？\n将生成出柜交接单并更新柜位状态。`,
@@ -970,7 +994,29 @@ async function submitTransfer() {
         ElMessage.success('出柜手续办理成功')
         currentTransferOrder.value = transfer
         transferDialogVisible.value = false
-        buildOrderPreviewData(selectedBody.value!, transferForm)
+        
+        orderPreviewData.bodyName = selectedBody.value!.name
+        orderPreviewData.gender = selectedBody.value!.gender
+        orderPreviewData.age = selectedBody.value!.age
+        orderPreviewData.idCard = selectedBody.value!.idCard
+        orderPreviewData.causeOfDeath = selectedBody.value!.causeOfDeath
+        orderPreviewData.deathTime = selectedBody.value!.deathTime
+        orderPreviewData.cabinetCode = selectedBody.value!.cabinetCode
+        orderPreviewData.enterTime = selectedBody.value!.enterTime
+        orderPreviewData.transferTime = transfer.transferTime
+        orderPreviewData.storageDays = billingSnapshot.days
+        orderPreviewData.dailyRate = dailyRate
+        orderPreviewData.totalFee = billingSnapshot.total
+        orderPreviewData.paidFee = billingSnapshot.paid
+        orderPreviewData.feeStatus = billingSnapshot.remaining <= 0 ? 'paid' : billingSnapshot.paid > 0 ? 'partial' : 'unpaid'
+        orderPreviewData.transferType = transferForm.transferType
+        orderPreviewData.receiver = transferForm.receiver || undefined
+        orderPreviewData.receiverIdCard = transferForm.receiverIdCard || undefined
+        orderPreviewData.policeCertNo = selectedBody.value!.policeCertNo
+        orderPreviewData.processDestination = selectedBody.value!.processDestination
+        orderPreviewData.operator = transferForm.operator
+        orderPreviewData.remarks = transferForm.remarks || undefined
+        
         transferOrderVisible.value = true
         activeTab.value = 'records'
       }

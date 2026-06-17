@@ -111,7 +111,7 @@ export const useCabinetStore = defineStore('cabinet', () => {
   const maintenanceCabinets = computed(() => cabinets.value.filter(c => c.status === 'maintenance'))
 
   const storingBodies = computed(() => bodies.value.filter(b => b.status === 'storing' || b.status === 'overdue'))
-  const unknownBodies = computed(() => bodies.value.filter(b => b.isUnknown))
+  const unknownBodies = computed(() => bodies.value.filter(b => b.isUnknown && b.status !== 'picked'))
 
   const overdueBodies = computed(() => {
     return bodies.value
@@ -292,7 +292,9 @@ export const useCabinetStore = defineStore('cabinet', () => {
       feeStatus,
       totalFee,
       paidFee,
+      dailyRate: billing?.dailyRate,
       storageDays,
+      enterTime: body.enterTime,
       isUnknown: extra?.isUnknown ?? body.isUnknown,
       policeCertNo: extra?.policeCertNo ?? body.policeCertNo,
       processDestination: extra?.processDestination ?? body.processDestination,
