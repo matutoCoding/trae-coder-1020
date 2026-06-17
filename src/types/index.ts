@@ -34,6 +34,9 @@ export interface BodyInfo {
   verifyStatus: 'pending' | 'verified' | 'rejected'
   verifyTime?: string
   verifyOperator?: string
+  policeCertNo?: string
+  processDestination?: string
+  identityHistory?: BodyIdentityUpdate[]
 }
 
 export interface BillingRecord {
@@ -113,6 +116,24 @@ export interface TransferRecord {
   receiver?: string
   receiverIdCard?: string
   transferTime: string
+  remarks?: string
+  feeStatus?: 'paid' | 'partial' | 'unpaid'
+  totalFee?: number
+  paidFee?: number
+  storageDays?: number
+  isUnknown?: boolean
+  policeCertNo?: string
+  processDestination?: string
+  identityUpdates?: BodyIdentityUpdate[]
+}
+
+export interface BodyIdentityUpdate {
+  id: string
+  updateTime: string
+  operator: string
+  fieldName: string
+  oldValue: string
+  newValue: string
   remarks?: string
 }
 

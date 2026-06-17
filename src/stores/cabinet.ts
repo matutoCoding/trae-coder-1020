@@ -229,7 +229,23 @@ export const useCabinetStore = defineStore('cabinet', () => {
     }
   }
 
-  function transferBody(bodyId: string, transferType: 'cremation' | 'family' | 'other', operator: string, receiver?: string, receiverIdCard?: string, remarks?: string) {
+  function transferBody(
+    bodyId: string, 
+    transferType: 'cremation' | 'family' | 'other', 
+    operator: string, 
+    receiver?: string, 
+    receiverIdCard?: string, 
+    remarks?: string,
+    extra?: {
+      feeStatus?: 'paid' | 'partial' | 'unpaid'
+      totalFee?: number
+      paidFee?: number
+      storageDays?: number
+      isUnknown?: boolean
+      policeCertNo?: string
+      processDestination?: string
+    }
+  ) {
     const body = bodies.value.find(b => b.id === bodyId)
     if (!body) return null
 
@@ -242,6 +258,25 @@ export const useCabinetStore = defineStore('cabinet', () => {
       cabinet.lastCheckTime = dayjs().format('YYYY-MM-DD HH:mm:ss')
     }
 
+    const billing = billingRecords.value.find(b => b.bodyId === bodyId && !b.exitTime)
+    const transferTime = dayjs().format('YYYY-MM-DD HH:mm:ss')
+    
+    let storageDays = extra?.storageDays
+    let totalFee = extra?.totalFee
+    let paidFee = extra?.paidFee
+    let feeStatus = extra?.feeStatus
+
+    if (billing) {
+      billing.exitTime = transferTime
+      storageDays = dayjs(transferTime).diff(dayjs(billing.enterTime), 'day')
+      storageDays = storageDays > 0 ? storageDays : 1
+      billing.storageDays = storageDays
+      billing.totalAmount = storageDays * billing.dailyRate
+      totalFee = billing.totalAmount
+      paidFee = billing.paidAmount
+      feeStatus = paidFee >= totalFee ? 'paid' : paidFee > 0 ? 'partial' : 'unpaid'
+    }
+
     const transfer: TransferRecord = {
       id: generateId(),
       bodyId,
@@ -252,20 +287,41 @@ export const useCabinetStore = defineStore('cabinet', () => {
       operator,
       receiver,
       receiverIdCard,
-      transferTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-      remarks
+      transferTime,
+      remarks,
+      feeStatus,
+      totalFee,
+      paidFee,
+      storageDays,
+      isUnknown: extra?.isUnknown ?? body.isUnknown,
+      policeCertNo: extra?.policeCertNo ?? body.policeCertNo,
+      processDestination: extra?.processDestination ?? body.processDestination,
+      identityUpdates: body.identityHistory
     }
     transferRecords.value.push(transfer)
 
-    const billing = billingRecords.value.find(b => b.bodyId === bodyId && !b.exitTime)
-    if (billing) {
-      billing.exitTime = transfer.transferTime
-      const days = dayjs(transfer.transferTime).diff(dayjs(billing.enterTime), 'day')
-      billing.storageDays = days > 0 ? days : 1
-      billing.totalAmount = billing.storageDays * billing.dailyRate
+    return transfer
+  }
+
+  function addIdentityHistory(bodyId: string, operator: string, fieldName: string, oldValue: string, newValue: string, remarks?: string) {
+    const body = bodies.value.find(b => b.id === bodyId)
+    if (!body) return null
+
+    if (!body.identityHistory) {
+      body.identityHistory = []
     }
 
-    return transfer
+    const update = {
+      id: generateId(),
+      updateTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      operator,
+      fieldName,
+      oldValue,
+      newValue,
+      remarks
+    }
+    body.identityHistory.push(update)
+    return update
   }
 
   function updateBillingPayment(billingId: string, amount: number) {
@@ -520,6 +576,18 @@ export const useCabinetStore = defineStore('cabinet', () => {
     const data: number[] = []
     const totalCabinets = cabinets.value.length || 30
 
+    function countOccupyingBodies(startOfDay: dayjs.Dayjs, endOfDay: dayjs.Dayjs) {
+      return bodies.value.filter(b => {
+        const enterTime = dayjs(b.enterTime)
+        if (enterTime.isAfter(endOfDay)) return false
+        if (b.status === 'picked') {
+          const transfer = transferRecords.value.find(t => t.bodyId === b.id)
+          if (transfer && dayjs(transfer.transferTime).isBefore(startOfDay)) return false
+        }
+        return true
+      }).length
+    }
+
     if (period === 'week') {
       for (let i = 6; i >= 0; i--) {
         const date = dayjs().subtract(i, 'day')
@@ -528,17 +596,7 @@ export const useCabinetStore = defineStore('cabinet', () => {
         
         labels.push(date.format('MM-DD'))
         
-        const occupyingBodies = bodies.value.filter(b => {
-          const enterTime = dayjs(b.enterTime)
-          if (enterTime.isAfter(endOfDay)) return false
-          if (b.status === 'picked') {
-            const transfer = transferRecords.value.find(t => t.bodyId === b.id)
-            if (transfer && dayjs(transfer.transferTime).isBefore(startOfDay)) return false
-          }
-          return true
-        })
-        
-        const occupiedCount = Math.max(1, Math.min(totalCabinets, occupyingBodies.length + Math.floor(Math.random() * 5)))
+        const occupiedCount = countOccupyingBodies(startOfDay, endOfDay)
         data.push(Math.round((occupiedCount / totalCabinets) * 10000) / 100)
       }
     } else if (period === 'month') {
@@ -549,17 +607,7 @@ export const useCabinetStore = defineStore('cabinet', () => {
         
         labels.push(date.format('MM-DD'))
         
-        const occupyingBodies = bodies.value.filter(b => {
-          const enterTime = dayjs(b.enterTime)
-          if (enterTime.isAfter(endOfDay)) return false
-          if (b.status === 'picked') {
-            const transfer = transferRecords.value.find(t => t.bodyId === b.id)
-            if (transfer && dayjs(transfer.transferTime).isBefore(startOfDay)) return false
-          }
-          return true
-        })
-        
-        const occupiedCount = Math.max(1, Math.min(totalCabinets, occupyingBodies.length + Math.floor(Math.random() * 5)))
+        const occupiedCount = countOccupyingBodies(startOfDay, endOfDay)
         data.push(Math.round((occupiedCount / totalCabinets) * 10000) / 100)
       }
     } else {
@@ -567,12 +615,12 @@ export const useCabinetStore = defineStore('cabinet', () => {
         const month = dayjs().subtract(i, 'month')
         const startOfMonth = month.startOf('month')
         const endOfMonth = month.endOf('month')
+        const midOfMonth = month.date(15).startOf('day')
         
         labels.push(month.format('YYYY-MM'))
         
-        const avgOccupied = Math.round((occupiedCabinets.value.length / totalCabinets) * 10000) / 100
-        const variation = (Math.random() - 0.5) * 10
-        data.push(Math.max(10, Math.min(95, Math.round((avgOccupied + variation) * 100) / 100)))
+        const occupiedCount = countOccupyingBodies(midOfMonth, midOfMonth.endOf('day'))
+        data.push(Math.round((occupiedCount / totalCabinets) * 10000) / 100)
       }
     }
 
@@ -602,6 +650,7 @@ export const useCabinetStore = defineStore('cabinet', () => {
     updateBody,
     verifyBody,
     transferBody,
+    addIdentityHistory,
     updateBillingPayment,
     addTemperatureRecord,
     addDevice,
